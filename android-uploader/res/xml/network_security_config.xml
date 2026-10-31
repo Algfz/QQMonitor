@@ -1,0 +1,22 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+  网络安全配置：默认禁止明文 HTTP，只对本机回环放行。
+
+  背景：Api.resolveBase() 的最后一步是探测 http://127.0.0.1:8088
+  （USB 调试 adb reverse tcp:8088 tcp:8088 / 本机代理）。Android 9+ 默认拒绝明文，
+  加上 AndroidManifest 里的 android:usesCleartextTraffic="false"，这条兜底以前必然静默失败。
+  这里只给回环地址开明文，其余域名/IP 仍强制 HTTPS（Tailscale 域名不受影响）。
+  注意：networkSecurityConfig 的优先级高于 usesCleartextTraffic，两者并存时不冲突。
+-->
+<network-security-config>
+    <base-config cleartextTrafficPermitted="false" />
+
+    <domain-config cleartextTrafficPermitted="true">
+        <domain includeSubdomains="false">127.0.0.1</domain>
+        <domain includeSubdomains="false">localhost</domain>
+        <!-- IPv6 回环。当前 App 的兜底只拼 http://127.0.0.1:8088，不会用到这条；
+             保留声明是为了以后改用 ::1 时不用再改配置（Java 的 URL 主机名会带方括号，
+             届时需要写成 [::1]）。 -->
+        <domain includeSubdomains="false">::1</domain>
+    </domain-config>
+</network-security-config>

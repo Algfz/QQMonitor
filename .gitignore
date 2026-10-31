@@ -1,0 +1,32 @@
+__pycache__/
+*.pyc
+*.pyo
+.venv/
+venv/
+data/
+config.yaml
+*.bak
+_local/
+.DS_Store
+Thumbs.db
+# 第三方同步盘产生的瞬时锁文件
+sync.ffs_lock
+# 开发期探测脚本（逆向 NTQQ 加密数据库用，非产品代码）
+_*.py
+
+models/
+
+# 本地工具留下的配置目录
+.dsh/
+
+
+# 打包产物（可能含本地配置，不入库）
+/dist/
+/android-uploader/build/
+/android-uploader/*.keystore
+/android-uploader/*.apk
+/android-uploader/*.idsig
+# 交接资料包（可能含凭据，不入库）
+handoff/
+# 根目录临时录音（体积大，只留在本机）
+/*.mp3

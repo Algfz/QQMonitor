@@ -1,0 +1,24 @@
+aiohttp>=3.9.0
+PyYAML>=6.0
+pycryptodome>=3.20.0
+sqlcipher3>=0.6.2           # 解密 NTQQ 数据库（本机库同步 / 媒体同步共用）
+openai>=1.40.0            # AI 助手：对话 / 向量 / 总结（OpenAI 兼容协议）
+numpy                     # 向量存储与相似度计算（torch 已依赖，此处显式声明）
+# 拖拽导入的清洗能力（缺省可运行，仅对应功能降级：图片不 OCR / 文档不提取文本）
+rapidocr-onnxruntime>=1.3.24   # 图片 OCR 识别文字
+requests>=2.31.0               # 网页抓取（微信公众号文章 → Markdown）
+beautifulsoup4>=4.12.0         # 网页正文定位与清洗
+markdownify>=0.13.0            # HTML → Markdown（保留表格）
+pymupdf>=1.24.0                # PDF 文本提取
+python-docx>=1.1.0             # Word 文本提取
+python-pptx>=0.6.23            # PPT 文本提取
+pywin32>=306; sys_platform == "win32"   # 旧版 .doc 提取（调用本机 Word COM；缺失时 .doc 只归档）
+
+# 会议录屏/录音转写（缺省可运行，仅"拖入音视频不转写"，仍会存档原件）
+# 注意：torch 需按显卡装对应 CUDA 版才能用 GPU 加速，例如（CUDA 12.8）：
+#   pip install torch torchaudio --index-url https://download.pytorch.org/whl/cu128
+# 无显卡或不想装 CUDA 时，直接 pip install torch 装 CPU 版也能跑（速度慢些）
+torch>=2.0
+torchaudio>=2.0
+funasr>=1.1.0                  # 达摩院 Paraformer 中文语音识别
+# 另需系统级 ffmpeg（提取视频音轨），Windows 可用：winget install ffmpeg

@@ -1,0 +1,266 @@
+# ============ 数据来源 ============
+# 2026-10-30 决策：不再使用 NapCat / OneBot 等「额外登录一个 QQ 号」的取数方式
+# （封号风险 + 会漏消息）。消息只从本机 QQ 数据库读取：
+#   knowledge.nt_db + knowledge.key（见下方 knowledge 段）
+# 因此不再需要 qq 段的 ws_mode / ws_host / ws_port / api_base 等配置。
+
+# ============ 存储 ============
+storage:
+  db_path: data/qqmonitor.db
+  meeting_dir: data/meetings
+  inbox_dir: data/inbox
+  digest_dir: data/digests
+
+# ============ 知识库 ============
+# data/knowledge/ 存放整理后的信息（聊天记录原文 / 媒体 / 学校文件 / 会议文字稿）
+# nt_db + key 填了之后，import 会自动把聊天里的图片/语音/文件也同步进知识库
+# 密钥敏感，只写在本机 config.yaml（已 gitignore），不要提交
+knowledge:
+  dir: data/knowledge
+  nt_db: ""     # 例: C:\Users\<你的用户名>\Documents\Tencent Files\<你的QQ号>\nt_qq\nt_db\nt_msg.db
+  key: ""       # 16 位数据库密钥（NTQQ 用 SQLCipher 加密，密钥随账号变化）
+
+  # 定时自动同步：每隔 N 分钟从本机 QQ 库同步新消息并自动清洗（媒体/识别/渲染）
+  # 0 = 关闭（默认）；>0 = 开启，下限 1 分钟。也可在设置页勾选，改后需重启服务生效。
+  # 没有新消息时本轮秒级结束，不会加载识别模型。
+  auto_sync_minutes: 0
+
+  # 每次同步（含定时自动同步）后自动增量更新 RAG 向量索引。
+  # 索引是增量的（只处理变化的文件），有新消息时开销很小。
+  # 关掉的话 AI 问答会一直用旧索引，新消息检索不到。
+  auto_index: true
+  # data/inbox 里的课堂录音/录屏是否每轮自动转写（长录音会拖慢当轮同步）
+  audio_inbox_auto: false
+
+  # 群文件自动入库：同步时识别聊天记录里的「文件」消息。
+  # 只复制**本机已有副本**的文件（你在 QQ 里点过下载），不联网下载；
+  # PDF/Word/PPT 自动提取文字进 transcripts/，其余类型只归档到 documents/。
+  group_files:
+    enabled: true
+    max_mb: 50            # 超过大小的文件只记录、不入库
+    max_per_run: 10       # 每轮同步最多处理几个文件（剩下的下轮继续）
+    scan_downloads: true  # 消息没带本地路径时，按「文件名+大小」去 Downloads 里找
+
+
+# 图片理解引擎：用视觉语言模型取代单纯 OCR
+vision:
+  # local = 本地 GPU 推理（推荐，隐私不出本机）
+  # api   = 云端视觉模型（可用 72B 大模型，效果更好，但图片会离开本机）
+  # off   = 关闭，回退到 RapidOCR（只能提取文字，不能描述图片）
+  backend: local
+
+  # 本地模型。8GB 显存建议 3B；首次调用会自动下载（约 6GB）
+  model: Qwen/Qwen2.5-VL-3B-Instruct
+
+  max_pixels: 1003520   # 1280*28*28，限制单图分辨率以省显存
+  max_new_tokens: 2048
+
+  # 模型常驻策略：空闲 N 分钟后自动把模型移回内存、释放显存
+  # （下次调用约 0.6 秒搬回 GPU，实测 4bit 模型 CPU<->GPU 往返可靠）
+  # 0 = 不自动卸载（常驻显存）。仅 4bit 整体加载模式下生效。
+  idle_unload_minutes: 5
+  torch_dtype: bfloat16
+  attn: sdpa
+
+  # 量化：4bit 让权重 6GB→2.4GB，全部装进显卡，速度约快一倍且输出更完整
+  #（8GB 显卡强烈建议 4bit；显存充裕可设 none 用 bf16）
+  quant: 4bit
+  device: auto          # auto | cuda:0（auto 会在显存不足时把部分层卸到 CPU）
+
+  # backend=api 时填写（以硅基流动为例，可选）
+  api:
+    base_url: ""
+    api_key: ""
+    model: ""
+    timeout: 180
+
+  # 聊天同步时把图片里的文字 OCR 出来，内联进聊天 Markdown（让 AI 能看到通知截图的内容）
+  # 依赖 rapidocr-onnxruntime；表格会还原成 Markdown 表格
+  ocr_chat_images: true
+
+  # 疑似公式的行是否用 $...$ 包裹（启发式判断，可能有误判；公式 → LaTeX 需要
+  # 专门的公式识别模型，本项只做"保护公式行不被段落合并拆散"）
+  ocr_formula_wrap: false
+
+# ============ 拖拽导入（Web 知识库页）============
+# 拖文件进 WebUI 会自动分拣清洗：
+#   聊天记录（TXT/CSV/JSON/Bak）→ 导入数据库 + 生成聊天 Markdown
+#   图片 → 自动 OCR 识别文字（原图进 documents/，文字进 transcripts/）
+#   PDF / Word / PPT → 提取清洗成 AI 可读 Markdown（原件保留在 documents/）
+#   会议录屏/录音（MP4/MKV/M4A/MP3…）→ 自动语音转写成 Markdown
+ingest:
+  # 图片是否自动 OCR 识别文字（依赖 rapidocr-onnxruntime，未安装时仅存档图片）
+  ocr: true
+
+  # 录屏/录音是否自动语音转写（依赖 funasr + torch + 系统 ffmpeg）
+  # 未安装时仅存档原文件，不报错
+  asr: true
+
+  # 转写推理设备：auto（有 NVIDIA 显卡用 cuda:0，否则 cpu）/ cuda:0 / cpu
+  asr_device: auto
+
+  # 转写后端（2026-10-31 核对）：实际跑 FireRedASR2-AED + CAM++ 说话人聚类
+  #   （app/asr_firered.py；FireRed 可用时本键被完全忽略，见 app/transcribe.py:372-383）。
+  # 本键只在 FireRed 不可用时作为 FunASR 兜底模型名：paraformer（默认，最准传统模型）
+  #   / paraformer-zh（带热词）/ SenseVoiceSmall（更快更省）。
+  # 历史值 ZhipuAI/GLM-ASR-Nano-2512 走 funasr 的 GLM 封装，代码自述有 bug
+  #   （app/transcribe.py:172-173），已不再作为默认。
+  asr_model: paraformer
+
+  # 长音频按 N 秒切一个 batch：越大越快越吃显存；8GB 显卡建议 120 以内
+  asr_batch_seconds: 120
+
+  # GLM-ASR 在 GPU 上最多放多少 GiB，其余层自动 offload 到内存；
+  # 32GB 内存 + 8GB 显存的机器建议 4，显存吃紧可调小到 2-3
+  asr_glm_gpu_gb: 4.0
+
+  # 转写完成后自动卸载模型、清空显存（下次转写重新加载约 30 秒）。
+  # 不是天天开会就保持 true；若一次批量导入很多音视频，可改 false 避免反复加载
+  asr_unload_after: true
+
+  # 热词：空格分隔，能明显提升专有名词（人名、课程名、术语）的识别率
+  # 注意：SenseVoice 热词格式为「词 拼音」（如 "班主任 ban zhu ren"）；
+  #       paraformer-zh 为纯文本（如 "班主任 家长会"）。当前为空则不影响。
+  asr_hotwords: ""
+
+# ============ Web 看板 ============
+web:
+  # 127.0.0.1 = 只有本机能访问（默认，最安全）。
+  # 需要手机/别的电脑访问：改成 0.0.0.0（启动日志会打印局域网地址），
+  # 并务必设置下面的 access_token —— 否则同网段任何设备都能直接看聊天记录。
+  host: 127.0.0.1
+  port: 8088
+  # 访问口令：留空 = 不鉴权（仅限 127.0.0.1）；设置后页面会先跳 /login，
+  # 登录态存 HttpOnly Cookie（30 天），也可用 /login 或 ?token=xxx 首次进入。
+  access_token: ""
+  # 上传上限（MB）。会议录屏常达 1-2GB，超过会返回 413。0 = 不限制（不建议）
+  max_upload_mb: 2048
+
+# ============ 知识库对外只读 API（给外部机器人 / 自建助手用） ============
+# 开启后可用 /api/kb/search、/api/kb/ask、/api/kb/meta、/api/kb/health 查询知识库。
+# 鉴权独立于 web.access_token：请求头带 Authorization: Bearer <token>。
+# 建议只在 Tailscale 内网暴露（tailscale serve），不要把 host 改成 0.0.0.0。
+api:
+  enabled: false            # 默认关闭；要开放给机器人再改 true
+  token: ""                 # 访问口令（留空 = API 一律拒绝），用随机长字符串
+  rate_limit_per_min: 30    # 每来源每分钟最大请求数
+  max_k: 12                 # 单次检索最多返回条数
+
+# ============ 重要消息自动标记 ============
+important:
+  # 命中这些关键词的消息自动标记为重要
+  keywords:
+    - 通知
+    - 集合
+    - 缴费
+    - 开会
+    - 报名
+    - 截止
+    - 紧急
+    - 重要
+    - 签到
+    - 交表
+  # 包含 @全体成员 的消息自动标记为重要
+  at_all: true
+
+# ============ AI 助手（全部走 OpenAI 兼容协议的云端 API）============
+# 三类模型相互独立，可分别指向不同服务商
+# 页面配置优先：WebUI 设置页保存后写入 data/llm.yaml（含密钥，不进 git），
+# 会覆盖本文件的 llm 段。首次使用建议直接在设置页填，不必改这里。
+llm:
+  chat:            # 对话 / 知识库问答
+    base_url: "https://api.deepseek.com"
+    api_key: ""
+    model: "deepseek-chat"
+    temperature: 0.3      # 问答求准，温度压低
+    max_tokens: 2048
+    timeout: 120
+  embedding:       # 文本向量（知识库语义检索）
+    # provider: api  = 调用云端/本地 OpenAI 兼容接口（base_url + api_key）
+    # provider: local = 直接用项目 models/ 里的模型在本进程推理（离线，需先下载）
+    provider: "api"
+    base_url: "https://api.siliconflow.cn/v1"
+    api_key: ""
+    model: "BAAI/bge-m3"  # local 时填项目内目录，如 models/Qwen3-Embedding-0.6B
+    dimensions: 1024      # 需与模型匹配（local 模型由模型决定，仅用于校验）
+    batch_size: 16
+    timeout: 60
+    # 以下仅 provider=local 时生效
+    device: "auto"            # cuda / cpu / auto
+    torch_dtype: ""           # 空 = GPU bfloat16、CPU float32
+    max_length: 2048          # 单条最大 token（超长块会先被切分）
+    max_batch_tokens: 8192    # 单批总 token 预算（防止长文本撑爆 8GB 显存）
+    idle_unload_minutes: 10   # 空闲多久自动从显存卸载（0 = 常驻）
+  summary:         # 日 / 周 / 月 / 年总结
+    base_url: "https://api.deepseek.com"
+    api_key: ""
+    model: "deepseek-chat"
+    temperature: 0.5
+    max_tokens: 4096
+    timeout: 180
+  rag:             # 知识库检索参数
+    index_chat: true      # false 则不把群聊内容上传云端
+    top_k: 6              # 送入模型的片段数
+    chunk_size: 600       # 文档分块字数（聊天按天切，不受此影响）
+    max_context: 12000    # 上下文字符上限
+
+  # 自定义系统提示词（可选）：写在这里的内容会**追加**到内置提示词末尾，不会替换它。
+  # 内置的那部分包含工具清单、查证要求、日历可信度规则等，删掉会明显变笨，
+  # 所以只提供「追加」而不是「替换」。想补充自己的背景/偏好时填这里；
+  # 设置页「模型与密钥 → 自定义系统提示词」也能改这一项。
+  # system_extra: |
+  #   引用通知时写明是谁在哪天说的。
+  #   我参与的项目群优先级高于其他群。
+  system_extra: ""
+
+# ============ 监听范围 ============
+# 生效名单 = 手工基线 ∪ 自动命中 − ignore（由程序计算，建议只通过设置页改，不要手改本节）
+# 留空 = 监听机器人加入的所有群；也可填群号列表，如 [123456789, 987654321]
+watch_groups: []
+
+# 好友白名单（私聊消息同步）：与群相反——留空 = 不同步任何好友（保护私聊隐私），
+# 显式填入好友 QQ 号才会同步其私聊消息。也可在设置页勾选管理。
+watch_buddies: []
+
+# 手工基线：网页里手工勾选/填写的项（自动规则永远不会删它们）
+watch_groups_manual: []
+watch_buddies_manual: []
+
+# 自动白名单规则：命中「备注名后缀」或「置顶会话」的群/好友自动加入白名单
+auto_watch:
+  enabled: true
+  by_remark_suffix: [_._]   # 备注名以这些后缀结尾（可多个）
+  by_pin: false             # 是否同时纳入置顶会话
+  scope: both               # both / groups / friends
+  ignore_groups: []         # 在网页里被取消勾选的自动群（防止下一轮又加回）
+  ignore_buddies: []
+
+# ============ 你的身份卡 ============
+# AI 会据此把聊天记录里的名字关联到你本人，回答「安排/待办」类问题时
+# 主动提醒你本人承担的职责与前置准备（如提前到场、带材料）
+# 录音入库（手机 App / 会议记录 / 课堂录音都走这里）
+recordings:
+  enabled: true
+  # 单个文件上限（MB）
+  max_mb: 500
+  # 分类白名单：文件名「分类名+日期」，分类要在下面的名单里才算合规。
+  # 手机 App 的默认名单也以这里为准（App 可从 /api/recordings 同步）。
+  courses:
+    - 高等数学
+    - 线性代数
+    - 大学英语
+    - 项目周会
+    - 访谈
+  # 允许把腾讯会议的录制文件也算作录音
+  allow_meetings: true
+  # 独立转写进程的内存上限（GB）：超了就把这条标失败并退出，避免把整机拖死
+  max_rss_gb: 10
+
+user:
+  qq: 0                # 本机 QQ 号
+  nickname: ""         # QQ 昵称
+  name: ""             # 真实姓名
+  roles: []            # 固定职责，如 ["班长", "学习委员"]
+  context: ""          # 可选：你自己的处境，一两句话即可（学校/班级/部门/项目/学期）
+                       # 会被拼进 AI 的系统提示词，让它知道你说「我们班」「我们组」指什么
+                       # 例：「我在某大学某学院某班当班长，这学期有高数、线代、大学英语」
